@@ -1,122 +1,116 @@
-import os
-import logging
-import json
-import time
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import (
-    ApplicationBuilder, CommandHandler, ContextTypes, MessageHandler, filters
-)
-from scraper import buscar_olx  # Sua função de scraping da OLX
+# ----------------------------
+# bot.py final
+# ----------------------------
+
 from dotenv import load_dotenv
+import os
+import psycopg2
+from flask import Flask, request
+from telegram import Bot, Update, InlineKeyboardButton, InlineKeyboardMarkup
+from scraper import buscar_olx
 
-# --- Carrega variáveis do .env (se existir) ---
-load_dotenv()
+# ----------------------------
+# Carregar variáveis de ambiente
+# ----------------------------
+load_dotenv()  # carrega .env
 
-# --- Token e chat_id ---
-TOKEN = os.environ.get("TELEGRAM_TOKEN")
-CHAT_ID = os.environ.get("CHAT_ID")
+TOKEN = os.getenv("TELEGRAM_TOKEN")
+DATABASE_URL = os.getenv("DATABASE_URL")
+WEBHOOK_URL = os.getenv("WEBHOOK_URL")
+PORT = int(os.getenv("PORT", 8000))
 
-if not TOKEN or not CHAT_ID:
-    raise ValueError("❌ Defina TELEGRAM_TOKEN e CHAT_ID nas variáveis de ambiente!")
+bot = Bot(token=TOKEN)
+app = Flask(__name__)
 
-# --- Logging ---
-logging.basicConfig(level=logging.INFO)
+# ----------------------------
+# Conexão com PostgreSQL (Railway)
+# ----------------------------
+conn = psycopg2.connect(DATABASE_URL)
+cursor = conn.cursor()
 
-# --- Arquivo de persistência ---
-ARQUIVO_BUSCAS = "buscas.json"
-buscas_ativas = []
+# Criar tabela caso não exista
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS pesquisas (
+    id SERIAL PRIMARY KEY,
+    usuario TEXT,
+    termo TEXT,
+    data TIMESTAMP DEFAULT NOW()
+)
+""")
+conn.commit()
 
-def salvar_buscas():
-    try:
-        with open(ARQUIVO_BUSCAS, "w", encoding="utf-8") as f:
-            json.dump(buscas_ativas, f, ensure_ascii=False, indent=2)
-        logging.info("✅ Buscas salvas com sucesso.")
-    except Exception as e:
-        logging.error(f"❌ Erro ao salvar buscas: {e}")
-
-def carregar_buscas():
-    global buscas_ativas
-    try:
-        if os.path.exists(ARQUIVO_BUSCAS):
-            with open(ARQUIVO_BUSCAS, "r", encoding="utf-8") as f:
-                buscas_ativas = json.load(f)
-            logging.info(f"✅ Carregadas {len(buscas_ativas)} buscas salvas.")
-    except Exception as e:
-        logging.error(f"❌ Erro ao carregar buscas: {e}")
-
-# --- Comandos Telegram ---
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "🚗 Bot de busca OLX\n\n"
-        "Use /buscar para adicionar um carro:\n"
-        "/buscar modelo, ano_min, preco_max, cidades (separadas por vírgula)\n"
-        "Ex: /buscar gol, 2008, 30000, curitiba, pinhais, sao jose dos pinhais"
-    )
-
-async def buscar_comando(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        texto = " ".join(context.args)
-        dados = [x.strip() for x in texto.split(",")]
-        if len(dados) < 4:
-            await update.message.reply_text(
-                "❌ Formato inválido. Use: modelo, ano_min, preco_max, cidade1, cidade2..."
-            )
-            return
-
-        novo_carro = {
-            "modelo": dados[0],
-            "ano_min": int(dados[1]),
-            "preco_max": float(dados[2]),
-            "cidades": dados[3:]
-        }
-        buscas_ativas.append(novo_carro)
-        salvar_buscas()
-        await update.message.reply_text(
-            f"✅ Adicionado! Monitorando {novo_carro['modelo']} em {novo_carro['cidades']}."
-        )
-
-    except Exception as e:
-        logging.error(e)
-        await update.message.reply_text(f"❌ Erro ao adicionar carro: {e}")
-
-# --- Monitoramento ---
-async def monitorar(context: ContextTypes.DEFAULT_TYPE):
-    if not buscas_ativas:
-        logging.info("Nenhum carro na lista ainda...")
+# ----------------------------
+# Função que processa updates do Telegram
+# ----------------------------
+def process_update(update: Update):
+    message = update.message
+    if message is None:
         return
 
-    for carro in buscas_ativas:
-        for cidade in carro['cidades']:
-            resultados = buscar_olx(
-                modelo=carro['modelo'],
-                ano_min=carro.get('ano_min', 0),
-                km_max=carro.get('km_max', 999999),
-                preco_max=carro.get('preco_max', 99999999),
-                cidade=cidade
-            )
-            for link in resultados[:5]:  # limitar para não spam
-                await context.bot.send_message(chat_id=CHAT_ID, text=f"🚗 {link}")
+    texto = message.text
+    usuario = message.from_user.username or str(message.from_user.id)
 
-    salvar_buscas()  # salva a lista periodicamente
+    if texto.startswith("/start"):
+        bot.send_message(
+            chat_id=message.chat.id,
+            text="Olá! Eu posso te ajudar a buscar carros na OLX.\nUse /buscar <termo> para começar."
+        )
 
-# --- Botão de continuar (para pausas opcionais) ---
-async def botao_continuar(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    await query.edit_message_text("✅ Monitoramento retomado!")
+    elif texto.startswith("/buscar"):
+        args = texto.split()[1:]
+        if not args:
+            bot.send_message(chat_id=message.chat.id, text="Envie o termo de pesquisa: /buscar <termo>")
+            return
 
-# --- Inicialização do bot ---
+        termo = " ".join(args)
+
+        # Salvar pesquisa no banco
+        cursor.execute(
+            "INSERT INTO pesquisas (usuario, termo) VALUES (%s, %s)",
+            (usuario, termo)
+        )
+        conn.commit()
+
+        resultados = buscar_olx(termo)
+        if not resultados:
+            bot.send_message(chat_id=message.chat.id, text="Nenhum resultado encontrado.")
+            return
+
+        # Criar botões com link
+        buttons = [
+            [InlineKeyboardButton(f"{r['titulo']} - {r['preco']} ({r['cidade']})", url=r['link'])]
+            for r in resultados[:5]
+        ]
+        markup = InlineKeyboardMarkup(buttons)
+        bot.send_message(chat_id=message.chat.id, text="Resultados:", reply_markup=markup)
+
+    else:
+        bot.send_message(chat_id=message.chat.id, text="Use /start ou /buscar <termo> para começar.")
+
+# ----------------------------
+# Rota do webhook
+# ----------------------------
+@app.route(f"/{TOKEN}", methods=["POST"])
+def webhook():
+    update = Update.de_json(request.get_json(force=True), bot)
+    process_update(update)
+    return "ok"
+
+@app.route("/")
+def index():
+    return "Bot rodando!"
+
+# ----------------------------
+# Configurar webhook e rodar Flask
+# ----------------------------
+import asyncio
+
+async def configurar_webhook():
+    # Aqui chamamos a coroutine corretamente com await
+    await bot.set_webhook(url=f"{WEBHOOK_URL}/{TOKEN}")
+    print(f"Webhook configurado: {WEBHOOK_URL}/{TOKEN}")
+
 if __name__ == "__main__":
-    carregar_buscas()  # carrega buscas salvas
-
-    app = ApplicationBuilder().token(TOKEN).build()
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("buscar", buscar_comando))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, buscar_comando))
-
-    # Scheduler - a cada 10 minutos
-    job_queue = app.job_queue
-    job_queue.run_repeating(monitorar, interval=600, first=10)  # 600s = 10 min
-
-    print("Bot iniciado e monitorando buscas...")
-    app.run_polling()
+    # Executa a coroutine e depois inicia o Flask
+    asyncio.run(configurar_webhook())
+    app.run(host="0.0.0.0", port=PORT)
