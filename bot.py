@@ -30,7 +30,7 @@ PORT = int(os.environ.get("PORT", 8000))
 # 🔹 Flask para webhook
 app = Flask(__name__)
 
-# 🔹 Função de busca OLX (particulares)
+# 🔹 Função de busca OLX (somente particulares)
 def buscar_olx(modelo, cidade, estado, ano_min, ano_max, preco_min, preco_max):
     local = f"{cidade}%2C%20{estado}"
     url = (
@@ -75,18 +75,21 @@ def buscar_olx(modelo, cidade, estado, ano_min, ano_max, preco_min, preco_max):
                 if preco_texto.isdigit():
                     preco = int(preco_texto)
 
-            if ano and preco and ano_min <= ano <= ano_max and preco_min <= preco <= preco_max:
-                resultados.append(f"🚗 {titulo}\n💰 R${preco}\n📍 {localidade}\n🔗 {link}")
+            if ano and preco:
+                if ano_min <= ano <= ano_max and preco_min <= preco <= preco_max:
+                    resultados.append(f"🚗 {titulo}\n💰 R${preco}\n📍 {localidade}\n🔗 {link}")
 
-        return "\n\n".join(resultados[:5]) if resultados else "❌ Nenhum resultado dentro dos filtros definidos."
+        return "\n\n".join(resultados[:5]) if resultados else "❌ Nenhum resultado dentro dos filtros."
+
     except Exception as e:
         return f"⚠️ Erro na busca: {e}"
 
-# 🔹 Handlers de conversa (igual ao seu)
+# 🔹 Comando /start
 async def start(update: Update, context):
     await update.message.reply_text("Vamos buscar um carro! Qual é o modelo?")
     return MODELO
 
+# 🔹 Handlers da conversa
 async def modelo_handler(update: Update, context):
     context.user_data["modelo"] = update.message.text
     await update.message.reply_text("Qual o ano mínimo?")
@@ -119,6 +122,10 @@ async def cidade_handler(update: Update, context):
 
 async def estado_handler(update: Update, context):
     data = context.user_data
+    modelo = data["modelo"]
+    cidade = data["cidade"]
+    estado = data["estado"]
+
     try:
         ano_min = int(data["ano_min"])
         ano_max = int(data["ano_max"])
@@ -129,11 +136,12 @@ async def estado_handler(update: Update, context):
         return ConversationHandler.END
 
     await update.message.reply_text("🔎 Buscando anúncios de particulares…")
-    resultados = buscar_olx(data["modelo"], data["cidade"], data["estado"], ano_min, ano_max, preco_min, preco_max)
+    resultados = buscar_olx(modelo, cidade, estado, ano_min, ano_max, preco_min, preco_max)
     await update.message.reply_text(resultados)
+
     return ConversationHandler.END
 
-async def cancel(update: Update, context):
+async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Busca cancelada.")
     return ConversationHandler.END
 
@@ -153,6 +161,7 @@ conv_handler = ConversationHandler(
     },
     fallbacks=[CommandHandler("cancel", cancel)],
 )
+
 application.add_handler(conv_handler)
 
 # 🔹 Webhook Flask
@@ -163,15 +172,15 @@ async def webhook():
     await application.process_update(update)
     return "ok"
 
-# 🔹 Inicializa bot
+# 🔹 Inicializa bot (modo automático seguro)
 if __name__ == "__main__":
     if WEBHOOK_URL:
+        # Modo nuvem (Railway / Render)
         print("Rodando em modo WEBHOOK (Railway/Render)")
         asyncio.run(application.bot.set_webhook(WEBHOOK_URL))
         app.run(host="0.0.0.0", port=PORT)
     else:
-        # 🔹 Remove webhook antigo antes de rodar polling
-        res = requests.get(f"https://api.telegram.org/bot{TOKEN}/deleteWebhook")
-        print("Webhook removido:", res.json())
+        # Modo local (Polling) — remove webhook se existir
         print("Rodando em modo POLLING (Local)")
+        requests.get(f"https://api.telegram.org/bot{TOKEN}/deleteWebhook")
         application.run_polling()
