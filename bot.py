@@ -1,7 +1,7 @@
 import os
 import requests
 from dotenv import load_dotenv
-from telegram import Update
+from telegram import Update, Bot
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
@@ -30,12 +30,72 @@ PORT = int(os.environ.get("PORT", 8000))
 # 🔹 Flask para webhook
 app = Flask(__name__)
 
+# 🔹 Função refinada de busca OLX (somente particulares)
+def buscar_olx(modelo, cidade, estado, ano_min, ano_max, preco_min, preco_max):
+    local = f"{cidade}%2C%20{estado}"
+    url = (
+        "https://www.olx.com.br/autos-e-pecas/carros-vans-e-utilitarios"
+        f"?q={modelo.replace(' ', '%20')}"
+        f"&search[locations][0]={local}"
+        "&private_business=1"  # só particulares
+    )
+
+    try:
+        resposta = requests.get(url, headers=HEADERS, timeout=15)
+        if resposta.status_code != 200:
+            return "⚠️ Erro ao acessar OLX."
+
+        soup = BeautifulSoup(resposta.text, "html.parser")
+        items = soup.find_all("li", {"data-lurker_list_id": True})
+
+        resultados = []
+        links_vistos = set()
+
+        for item in items:
+            titulo_tag = item.select_one("h2")
+            preco_tag = item.select_one("span[data-testid='ad-price']")
+            localidade_tag = item.select_one("span[data-testid='ad-location']")
+            link_tag = item.select_one("a")
+
+            titulo = titulo_tag.get_text().strip() if titulo_tag else "Sem título"
+            localidade = localidade_tag.get_text().strip() if localidade_tag else "Sem local"
+            link = link_tag["href"] if link_tag else ""
+
+            if not link or link in links_vistos:
+                continue  # ignora links duplicados ou vazios
+
+            links_vistos.add(link)
+
+            # Pega ano no título
+            ano_match = re.search(r'\b(19|20)\d{2}\b', titulo)
+            ano = int(ano_match.group()) if ano_match else None
+
+            # Pega preço
+            preco = 0
+            if preco_tag:
+                preco_texto = re.sub(r'[^\d]', '', preco_tag.get_text())
+                if preco_texto.isdigit():
+                    preco = int(preco_texto)
+
+            # Aplica filtros
+            if ano and preco:
+                if ano_min <= ano <= ano_max and preco_min <= preco <= preco_max:
+                    resultados.append(f"🚗 {titulo}\n💰 R${preco}\n📍 {localidade}\n🔗 {link}")
+
+        if resultados:
+            return "\n\n".join(resultados[:5])
+        else:
+            return "❌ Nenhum resultado dentro dos filtros definidos."
+
+    except Exception as e:
+        return f"⚠️ Erro na busca: {e}"
+
 # 🔹 Comando /start
 async def start(update: Update, context):
     await update.message.reply_text("Vamos buscar um carro! Qual é o modelo?")
     return MODELO
 
-# 🔹 Handlers da conversa (mesmo do seu bot anterior)
+# 🔹 Handlers da conversa
 async def modelo_handler(update: Update, context):
     context.user_data["modelo"] = update.message.text
     await update.message.reply_text("Qual o ano mínimo?")
@@ -83,59 +143,9 @@ async def estado_handler(update: Update, context):
         await update.message.reply_text("⚠️ Ano e preço devem ser números. Use /start para tentar novamente.")
         return ConversationHandler.END
 
-    local = f"{cidade}%2C%20{estado}"
-    url = (
-        "https://www.olx.com.br/autos-e-pecas/carros-vans-e-utilitarios"
-        f"?q={modelo.replace(' ', '%20')}"
-        f"&search[locations][0]={local}"
-    )
-
-    await update.message.reply_text(f"🔎 Buscando resultados…\n{url}")
-
-    try:
-        resposta = requests.get(url, headers=HEADERS, timeout=15)
-        if resposta.status_code != 200:
-            await update.message.reply_text("⚠️ Erro ao acessar OLX")
-            return ConversationHandler.END
-
-        soup = BeautifulSoup(resposta.text, "html.parser")
-        items = soup.find_all("li", {"data-lurker_list_id": True})
-
-        if not items:
-            await update.message.reply_text("❌ Nenhum resultado encontrado.")
-            return ConversationHandler.END
-
-        resultados = []
-        for item in items:
-            titulo_tag = item.select_one("h2")
-            preco_tag = item.select_one("span[data-testid='ad-price']")
-            localidade_tag = item.select_one("span[data-testid='ad-location']")
-            link_tag = item.select_one("a")
-
-            titulo = titulo_tag.get_text().strip() if titulo_tag else "Sem título"
-            localidade = localidade_tag.get_text().strip() if localidade_tag else "Sem local"
-            link = link_tag["href"] if link_tag else ""
-
-            ano_match = re.search(r'\b(19|20)\d{2}\b', titulo)
-            ano = int(ano_match.group()) if ano_match else None
-
-            preco = 0
-            if preco_tag:
-                preco_texto = re.sub(r'[^\d]', '', preco_tag.get_text())
-                if preco_texto.isdigit():
-                    preco = int(preco_texto)
-
-            if ano and preco:
-                if ano_min <= ano <= ano_max and preco_min <= preco <= preco_max:
-                    resultados.append(f"🚗 {titulo}\n💰 R${preco}\n📍 {localidade}\n🔗 {link}")
-
-        if resultados:
-            await update.message.reply_text("\n\n".join(resultados[:5]))
-        else:
-            await update.message.reply_text("❌ Nenhum resultado dentro dos filtros definidos.")
-
-    except Exception as e:
-        await update.message.reply_text(f"⚠️ Erro na busca: {e}")
+    await update.message.reply_text("🔎 Buscando anúncios de particulares…")
+    resultados = buscar_olx(modelo, cidade, estado, ano_min, ano_max, preco_min, preco_max)
+    await update.message.reply_text(resultados)
 
     return ConversationHandler.END
 
@@ -173,11 +183,11 @@ async def webhook():
 # 🔹 Inicializa bot
 if __name__ == "__main__":
     if WEBHOOK_URL:
-        print("Rodando em modo WEBHOOK (Railway)")
+        print("Rodando em modo WEBHOOK (Railway/Render)")
         asyncio.run(application.bot.set_webhook(WEBHOOK_URL))
         app.run(host="0.0.0.0", port=PORT)
     else:
-        # 🔹 Modo polling local: deleta webhook antes de iniciar
+        # 🔹 Modo polling local: remove webhook antigo antes
         print("Rodando em modo POLLING (Local)")
         requests.get(f"https://api.telegram.org/bot{TOKEN}/deleteWebhook")
         application.run_polling()
