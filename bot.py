@@ -30,7 +30,18 @@ PORT = int(os.environ.get("PORT", 8000))
 # 🔹 Flask para webhook
 app = Flask(__name__)
 
-# 🔹 Função de busca OLX (somente particulares)
+# 🔹 Função para remover webhook
+def remove_webhook(token):
+    try:
+        response = requests.get(f"https://api.telegram.org/bot{token}/deleteWebhook")
+        if response.status_code == 200:
+            print("✅ Webhook removido com sucesso.")
+        else:
+            print("⚠️ Não foi possível remover webhook:", response.text)
+    except Exception as e:
+        print("⚠️ Erro ao remover webhook:", e)
+
+# 🔹 Função refinada de busca OLX (somente particulares)
 def buscar_olx(modelo, cidade, estado, ano_min, ano_max, preco_min, preco_max):
     local = f"{cidade}%2C%20{estado}"
     url = (
@@ -62,8 +73,7 @@ def buscar_olx(modelo, cidade, estado, ano_min, ano_max, preco_min, preco_max):
             link = link_tag["href"] if link_tag else ""
 
             if not link or link in links_vistos:
-                continue
-
+                continue  # ignora links duplicados ou vazios
             links_vistos.add(link)
 
             ano_match = re.search(r'\b(19|20)\d{2}\b', titulo)
@@ -79,7 +89,7 @@ def buscar_olx(modelo, cidade, estado, ano_min, ano_max, preco_min, preco_max):
                 if ano_min <= ano <= ano_max and preco_min <= preco <= preco_max:
                     resultados.append(f"🚗 {titulo}\n💰 R${preco}\n📍 {localidade}\n🔗 {link}")
 
-        return "\n\n".join(resultados[:5]) if resultados else "❌ Nenhum resultado dentro dos filtros."
+        return "\n\n".join(resultados[:5]) if resultados else "❌ Nenhum resultado dentro dos filtros definidos."
 
     except Exception as e:
         return f"⚠️ Erro na busca: {e}"
@@ -121,7 +131,9 @@ async def cidade_handler(update: Update, context):
     return ESTADO
 
 async def estado_handler(update: Update, context):
+    context.user_data["estado"] = update.message.text
     data = context.user_data
+
     modelo = data["modelo"]
     cidade = data["cidade"]
     estado = data["estado"]
@@ -161,7 +173,6 @@ conv_handler = ConversationHandler(
     },
     fallbacks=[CommandHandler("cancel", cancel)],
 )
-
 application.add_handler(conv_handler)
 
 # 🔹 Webhook Flask
@@ -172,15 +183,13 @@ async def webhook():
     await application.process_update(update)
     return "ok"
 
-# 🔹 Inicializa bot (modo automático seguro)
+# 🔹 Inicializa bot
 if __name__ == "__main__":
     if WEBHOOK_URL:
-        # Modo nuvem (Railway / Render)
         print("Rodando em modo WEBHOOK (Railway/Render)")
         asyncio.run(application.bot.set_webhook(WEBHOOK_URL))
         app.run(host="0.0.0.0", port=PORT)
     else:
-        # Modo local (Polling) — remove webhook se existir
         print("Rodando em modo POLLING (Local)")
-        requests.get(f"https://api.telegram.org/bot{TOKEN}/deleteWebhook")
+        remove_webhook(TOKEN)  # 🔹 remove qualquer webhook ativo
         application.run_polling()
