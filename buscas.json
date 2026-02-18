@@ -1,0 +1,10 @@
+[
+  {
+    "modelo": "HB20",
+    "ano_min": 2020,
+    "preco_max": 30000.0,
+    "cidades": [
+      "Curitiba"
+    ]
+  }
+]
