@@ -7,8 +7,8 @@ HEADERS = {
 }
 
 def buscar_olx(termo, tempo_monitoramento=0):
-    url = f"https://www.olx.com.br/brasil?q={termo.replace(' ', '%20')}"
-    
+    url = f"https://www.olx.com.br/autos-e-pecas/carros-vans-e-utilitarios?q={termo.replace(' ', '%20')}"
+
     inicio = time.time()
 
     while True:
