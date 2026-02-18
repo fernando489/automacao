@@ -1,38 +1,45 @@
 import requests
 from bs4 import BeautifulSoup
+import time
 
-def buscar_olx(termo):
-    termo_url = termo.replace(" ", "-")
-    url = f"https://www.olx.com.br/autos-e-pecas/carros-vans-e-utilitarios?q={termo_url}"
-    headers = {"User-Agent": "Mozilla/5.0"}
+HEADERS = {
+    "User-Agent": "Mozilla/5.0"
+}
 
-    try:
-        response = requests.get(url, headers=headers, timeout=10)
-        response.raise_for_status()
-    except Exception as e:
-        print(f"Erro ao acessar OLX: {e}")
-        return []
+def buscar_olx(termo, tempo_monitoramento=0):
+    url = f"https://www.olx.com.br/brasil?q={termo.replace(' ', '%20')}"
+    
+    inicio = time.time()
 
-    soup = BeautifulSoup(response.text, "html.parser")
-    resultados = []
-
-    for anuncio in soup.select("li.sc-1fcmfeb-2"):
+    while True:
         try:
-            titulo = anuncio.select_one("h2.sc-1qoge2i-0").get_text(strip=True)
-            preco_tag = anuncio.select_one("p.sc-ifAKCX.cHGsRk")
-            preco = preco_tag.get_text(strip=True) if preco_tag else "Sem preço"
-            link_tag = anuncio.select_one("a.sc-1fcmfeb-1")
-            link = link_tag["href"] if link_tag else "#"
-            cidade_tag = anuncio.select_one("span.sc-ifAKCX.fVYUd")
-            cidade = cidade_tag.get_text(strip=True) if cidade_tag else "Indefinida"
+            resposta = requests.get(url, headers=HEADERS, timeout=15)
 
-            resultados.append({
-                "titulo": titulo,
-                "preco": preco,
-                "link": link,
-                "cidade": cidade
-            })
-        except:
-            continue
+            if resposta.status_code != 200:
+                return "⚠️ OLX pode ter bloqueado a requisição."
 
-    return resultados
+            soup = BeautifulSoup(resposta.text, "html.parser")
+            anuncios = soup.find_all("a")
+
+            encontrados = []
+
+            for anuncio in anuncios:
+                texto = anuncio.get_text()
+                link = anuncio.get("href")
+
+                if termo.lower() in texto.lower() and link and "olx.com.br" in link:
+                    encontrados.append(f"🚗 {texto.strip()[:80]}\n🔗 {link}")
+
+            if encontrados:
+                return "\n\n".join(encontrados[:5])
+
+            if tempo_monitoramento == 0:
+                return "❌ Nenhum resultado encontrado agora."
+
+            if time.time() - inicio > tempo_monitoramento:
+                return "⏳ Monitoramento encerrado. Nada encontrado."
+
+            time.sleep(30)
+
+        except requests.exceptions.RequestException:
+            return "⚠️ Erro de conexão ou possível bloqueio da OLX."
