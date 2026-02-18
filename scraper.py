@@ -7,7 +7,7 @@ HEADERS = {
 }
 
 def buscar_olx(termo, tempo_monitoramento=0):
-    url = f"https://www.olx.com.br/autos-e-pecas/carros-vans-e-utilitarios?q={termo.replace(' ', '%20')}"
+    url = f"https://www.olx.com.br/autos-e-pecas/carros-vans-e-utilitarios?q={termo.replace(' ', '%20')}&search[locations][0]=Curitiba%2C%20PR&private_business=1"
 
     inicio = time.time()
 
