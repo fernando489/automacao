@@ -23,12 +23,9 @@ HEADERS = {"User-Agent": "Mozilla/5.0"}
 
 # 🔹 Carrega variáveis do .env
 load_dotenv()
-TOKEN = os.environ.get("TELEGRAM_TOKEN").strip()  # remove espaços extras
+TOKEN = os.environ.get("TELEGRAM_TOKEN").strip()
 WEBHOOK_URL = os.environ.get("WEBHOOK_URL")
 PORT = int(os.environ.get("PORT", 8000))
-
-# 🔹 Apaga webhook antigo para evitar conflito com polling
-requests.get(f"https://api.telegram.org/bot{TOKEN}/deleteWebhook")
 
 # 🔹 Flask para webhook
 app = Flask(__name__)
@@ -38,7 +35,7 @@ async def start(update: Update, context):
     await update.message.reply_text("Vamos buscar um carro! Qual é o modelo?")
     return MODELO
 
-# 🔹 Handlers da conversa
+# 🔹 Handlers da conversa (mesmo do seu bot anterior)
 async def modelo_handler(update: Update, context):
     context.user_data["modelo"] = update.message.text
     await update.message.reply_text("Qual o ano mínimo?")
@@ -77,7 +74,6 @@ async def estado_handler(update: Update, context):
     cidade = data["cidade"]
     estado = data["estado"]
 
-    # 🔹 Converte valores para números
     try:
         ano_min = int(data["ano_min"])
         ano_max = int(data["ano_max"])
@@ -96,7 +92,6 @@ async def estado_handler(update: Update, context):
 
     await update.message.reply_text(f"🔎 Buscando resultados…\n{url}")
 
-    # 🔹 Scraper com filtro de ano e preço
     try:
         resposta = requests.get(url, headers=HEADERS, timeout=15)
         if resposta.status_code != 200:
@@ -121,18 +116,15 @@ async def estado_handler(update: Update, context):
             localidade = localidade_tag.get_text().strip() if localidade_tag else "Sem local"
             link = link_tag["href"] if link_tag else ""
 
-            # 🔹 Extrai ano do título
             ano_match = re.search(r'\b(19|20)\d{2}\b', titulo)
             ano = int(ano_match.group()) if ano_match else None
 
-            # 🔹 Extrai preço do anúncio
             preco = 0
             if preco_tag:
                 preco_texto = re.sub(r'[^\d]', '', preco_tag.get_text())
                 if preco_texto.isdigit():
                     preco = int(preco_texto)
 
-            # 🔹 Aplica filtros
             if ano and preco:
                 if ano_min <= ano <= ano_max and preco_min <= preco <= preco_max:
                     resultados.append(f"🚗 {titulo}\n💰 R${preco}\n📍 {localidade}\n🔗 {link}")
@@ -170,7 +162,7 @@ conv_handler = ConversationHandler(
 
 application.add_handler(conv_handler)
 
-# 🔹 Rota webhook Flask
+# 🔹 Webhook Flask
 @app.route("/webhook", methods=["POST"])
 async def webhook():
     data = request.get_json(force=True)
@@ -185,5 +177,7 @@ if __name__ == "__main__":
         asyncio.run(application.bot.set_webhook(WEBHOOK_URL))
         app.run(host="0.0.0.0", port=PORT)
     else:
+        # 🔹 Modo polling local: deleta webhook antes de iniciar
         print("Rodando em modo POLLING (Local)")
+        requests.get(f"https://api.telegram.org/bot{TOKEN}/deleteWebhook")
         application.run_polling()
