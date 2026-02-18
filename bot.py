@@ -24,13 +24,13 @@ HEADERS = {"User-Agent": "Mozilla/5.0"}
 # 🔹 Carrega variáveis do .env
 load_dotenv()
 TOKEN = os.environ.get("TELEGRAM_TOKEN").strip()
-WEBHOOK_URL = os.environ.get("WEBHOOK_URL")  # Deve estar definido no Railway
+WEBHOOK_URL = os.environ.get("WEBHOOK_URL")  # Ex: https://seusite.up.railway.app/webhook
 PORT = int(os.environ.get("PORT", 8000))
 
 # 🔹 Flask
 app = Flask(__name__)
 
-# 🔹 Função de busca OLX (particulares)
+# 🔹 Função de busca OLX
 def buscar_olx(modelo, cidade, estado, ano_min, ano_max, preco_min, preco_max):
     local = f"{cidade}%2C%20{estado}"
     url = (
@@ -79,41 +79,41 @@ def buscar_olx(modelo, cidade, estado, ano_min, ano_max, preco_min, preco_max):
         return f"⚠️ Erro na busca: {e}"
 
 # 🔹 Handlers da conversa
-async def start(update: Update, context):
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Vamos buscar um carro! Qual é o modelo?")
     return MODELO
 
-async def modelo_handler(update: Update, context):
+async def modelo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["modelo"] = update.message.text
     await update.message.reply_text("Qual o ano mínimo?")
     return ANO_MIN
 
-async def ano_min_handler(update: Update, context):
+async def ano_min_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["ano_min"] = update.message.text
     await update.message.reply_text("Qual o ano máximo?")
     return ANO_MAX
 
-async def ano_max_handler(update: Update, context):
+async def ano_max_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["ano_max"] = update.message.text
     await update.message.reply_text("Preço mínimo?")
     return PRECO_MIN
 
-async def preco_min_handler(update: Update, context):
+async def preco_min_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["preco_min"] = update.message.text
     await update.message.reply_text("Preço máximo?")
     return PRECO_MAX
 
-async def preco_max_handler(update: Update, context):
+async def preco_max_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["preco_max"] = update.message.text
     await update.message.reply_text("Cidade (ex: Curitiba)?")
     return CIDADE
 
-async def cidade_handler(update: Update, context):
+async def cidade_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["cidade"] = update.message.text
     await update.message.reply_text("Estado (ex: PR)?")
     return ESTADO
 
-async def estado_handler(update: Update, context):
+async def estado_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = context.user_data
     modelo = data["modelo"]
     cidade = data["cidade"]
@@ -133,7 +133,7 @@ async def estado_handler(update: Update, context):
     await update.message.reply_text(resultados)
     return ConversationHandler.END
 
-async def cancel(update: Update, context):
+async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Busca cancelada.")
     return ConversationHandler.END
 
@@ -166,10 +166,10 @@ async def webhook():
 # 🔹 Inicializa bot
 if __name__ == "__main__":
     if WEBHOOK_URL:
-        import nest_asyncio
-        nest_asyncio.apply()  # necessário para Flask + asyncio
         print("Rodando em modo WEBHOOK (Railway/Render)")
+        # seta webhook
         asyncio.run(application.bot.set_webhook(WEBHOOK_URL))
+        # roda Flask
         app.run(host="0.0.0.0", port=PORT)
     else:
         print("Rodando em modo POLLING (Local)")
