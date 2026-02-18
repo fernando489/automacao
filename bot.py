@@ -1,6 +1,10 @@
 import os
+import re
+import asyncio
 import requests
 from dotenv import load_dotenv
+from flask import Flask, request
+from bs4 import BeautifulSoup
 from telegram import Update
 from telegram.ext import (
     ApplicationBuilder,
@@ -10,10 +14,6 @@ from telegram.ext import (
     filters,
     ContextTypes,
 )
-from flask import Flask, request
-import asyncio
-from bs4 import BeautifulSoup
-import re
 
 # 🔹 Estados da conversa
 MODELO, ANO_MIN, ANO_MAX, PRECO_MIN, PRECO_MAX, CIDADE, ESTADO = range(7)
@@ -24,41 +24,27 @@ HEADERS = {"User-Agent": "Mozilla/5.0"}
 # 🔹 Carrega variáveis do .env
 load_dotenv()
 TOKEN = os.environ.get("TELEGRAM_TOKEN").strip()
-WEBHOOK_URL = os.environ.get("WEBHOOK_URL")
+WEBHOOK_URL = os.environ.get("WEBHOOK_URL")  # Deve estar definido no Railway
 PORT = int(os.environ.get("PORT", 8000))
 
-# 🔹 Flask para webhook
+# 🔹 Flask
 app = Flask(__name__)
 
-# 🔹 Função para remover webhook
-def remove_webhook(token):
-    try:
-        response = requests.get(f"https://api.telegram.org/bot{token}/deleteWebhook")
-        if response.status_code == 200:
-            print("✅ Webhook removido com sucesso.")
-        else:
-            print("⚠️ Não foi possível remover webhook:", response.text)
-    except Exception as e:
-        print("⚠️ Erro ao remover webhook:", e)
-
-# 🔹 Função refinada de busca OLX (somente particulares)
+# 🔹 Função de busca OLX (particulares)
 def buscar_olx(modelo, cidade, estado, ano_min, ano_max, preco_min, preco_max):
     local = f"{cidade}%2C%20{estado}"
     url = (
         "https://www.olx.com.br/autos-e-pecas/carros-vans-e-utilitarios"
         f"?q={modelo.replace(' ', '%20')}"
         f"&search[locations][0]={local}"
-        "&private_business=1"  # só particulares
+        "&private_business=1"
     )
-
     try:
-        resposta = requests.get(url, headers=HEADERS, timeout=15)
-        if resposta.status_code != 200:
+        resp = requests.get(url, headers=HEADERS, timeout=15)
+        if resp.status_code != 200:
             return "⚠️ Erro ao acessar OLX."
-
-        soup = BeautifulSoup(resposta.text, "html.parser")
+        soup = BeautifulSoup(resp.text, "html.parser")
         items = soup.find_all("li", {"data-lurker_list_id": True})
-
         resultados = []
         links_vistos = set()
 
@@ -71,9 +57,8 @@ def buscar_olx(modelo, cidade, estado, ano_min, ano_max, preco_min, preco_max):
             titulo = titulo_tag.get_text().strip() if titulo_tag else "Sem título"
             localidade = localidade_tag.get_text().strip() if localidade_tag else "Sem local"
             link = link_tag["href"] if link_tag else ""
-
             if not link or link in links_vistos:
-                continue  # ignora links duplicados ou vazios
+                continue
             links_vistos.add(link)
 
             ano_match = re.search(r'\b(19|20)\d{2}\b', titulo)
@@ -85,21 +70,19 @@ def buscar_olx(modelo, cidade, estado, ano_min, ano_max, preco_min, preco_max):
                 if preco_texto.isdigit():
                     preco = int(preco_texto)
 
-            if ano and preco:
-                if ano_min <= ano <= ano_max and preco_min <= preco <= preco_max:
-                    resultados.append(f"🚗 {titulo}\n💰 R${preco}\n📍 {localidade}\n🔗 {link}")
+            if ano and preco and ano_min <= ano <= ano_max and preco_min <= preco <= preco_max:
+                resultados.append(f"🚗 {titulo}\n💰 R${preco}\n📍 {localidade}\n🔗 {link}")
 
         return "\n\n".join(resultados[:5]) if resultados else "❌ Nenhum resultado dentro dos filtros definidos."
 
     except Exception as e:
         return f"⚠️ Erro na busca: {e}"
 
-# 🔹 Comando /start
+# 🔹 Handlers da conversa
 async def start(update: Update, context):
     await update.message.reply_text("Vamos buscar um carro! Qual é o modelo?")
     return MODELO
 
-# 🔹 Handlers da conversa
 async def modelo_handler(update: Update, context):
     context.user_data["modelo"] = update.message.text
     await update.message.reply_text("Qual o ano mínimo?")
@@ -131,9 +114,7 @@ async def cidade_handler(update: Update, context):
     return ESTADO
 
 async def estado_handler(update: Update, context):
-    context.user_data["estado"] = update.message.text
     data = context.user_data
-
     modelo = data["modelo"]
     cidade = data["cidade"]
     estado = data["estado"]
@@ -150,10 +131,9 @@ async def estado_handler(update: Update, context):
     await update.message.reply_text("🔎 Buscando anúncios de particulares…")
     resultados = buscar_olx(modelo, cidade, estado, ano_min, ano_max, preco_min, preco_max)
     await update.message.reply_text(resultados)
-
     return ConversationHandler.END
 
-async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def cancel(update: Update, context):
     await update.message.reply_text("Busca cancelada.")
     return ConversationHandler.END
 
@@ -186,10 +166,11 @@ async def webhook():
 # 🔹 Inicializa bot
 if __name__ == "__main__":
     if WEBHOOK_URL:
+        import nest_asyncio
+        nest_asyncio.apply()  # necessário para Flask + asyncio
         print("Rodando em modo WEBHOOK (Railway/Render)")
         asyncio.run(application.bot.set_webhook(WEBHOOK_URL))
         app.run(host="0.0.0.0", port=PORT)
     else:
         print("Rodando em modo POLLING (Local)")
-        remove_webhook(TOKEN)  # 🔹 remove qualquer webhook ativo
         application.run_polling()
