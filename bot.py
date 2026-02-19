@@ -14,6 +14,7 @@ from telegram.ext import (
     filters,
     ContextTypes,
 )
+from threading import Thread
 
 # 🔹 Estados da conversa
 MODELO, ANO_MIN, ANO_MAX, PRECO_MIN, PRECO_MAX, CIDADE, ESTADO = range(7)
@@ -155,22 +156,43 @@ conv_handler = ConversationHandler(
 )
 application.add_handler(conv_handler)
 
-# 🔹 Webhook Flask
+# 🔹 Webhook Flask (CORRIGIDO - função síncrona)
 @app.route("/webhook", methods=["POST"])
-async def webhook():
-    data = request.get_json(force=True)
-    update = Update.de_json(data, application.bot)
-    await application.process_update(update)
-    return "ok"
+def webhook():
+    """Recebe updates do Telegram via webhook"""
+    try:
+        data = request.get_json(force=True)
+        update = Update.de_json(data, application.bot)
+        
+        # Cria novo event loop para processar update
+        asyncio.run(application.process_update(update))
+        
+        return "ok", 200
+    except Exception as e:
+        print(f"❌ Erro no webhook: {e}")
+        return "error", 500
+
+@app.route("/")
+def index():
+    """Rota de health check"""
+    return "Bot OLX está rodando! ✅", 200
 
 # 🔹 Inicializa bot
+async def setup_webhook():
+    """Configura o webhook do bot"""
+    await application.initialize()
+    await application.bot.set_webhook(f"{WEBHOOK_URL}/webhook")
+    print(f"✅ Webhook configurado: {WEBHOOK_URL}/webhook")
+
 if __name__ == "__main__":
     if WEBHOOK_URL:
-        print("Rodando em modo WEBHOOK (Railway/Render)")
-        # seta webhook
-        asyncio.run(application.bot.set_webhook(WEBHOOK_URL))
-        # roda Flask
+        print("🚀 Rodando em modo WEBHOOK (Railway/Render)")
+        
+        # Configura webhook
+        asyncio.run(setup_webhook())
+        
+        # Roda Flask
         app.run(host="0.0.0.0", port=PORT)
     else:
-        print("Rodando em modo POLLING (Local)")
+        print("🏠 Rodando em modo POLLING (Local)")
         application.run_polling()
